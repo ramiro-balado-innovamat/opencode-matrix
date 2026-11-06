@@ -1,7 +1,7 @@
 # agent-matrix OpenCode plugin
 
-One Matrix account per OpenCode session, `@<person>.<session id, lowercase>:<server>`, created through the
-person's appservice token (see `../README.md`).
+One Matrix account per OpenCode session, `@<person>.<session id, lowercase>:<server>` by default (see `localpart`
+under [Options](#options)), created through the person's appservice token (see `../README.md`).
 
 ## When a session gets an account
 
@@ -22,7 +22,7 @@ cannot see the transcript.
 
 ## Dispatcher
 
-With the `workspace` option, the plugin also runs `@<person>.agent`. Every DM to it (or mention of it) from the
+With the `workspace` option, the plugin also runs a dispatcher account, `@<person>.agent` by default. Every DM to it (or mention of it) from the
 person's human account creates a session in `workspace`, gives it an account that invites the human to a DM, and
 sends the message as the session's first prompt, with an instruction to answer through `matrix_send`. The
 session starts untitled, so OpenCode's `title` agent names it after the first prompt, which renames the account and
@@ -118,7 +118,9 @@ its renderer, `lib/pages/chat/events/html_message.dart`. Other clients were not 
     "homeserver": "http://localhost:8008",
     "serverName": "agents.local",
     "person": "ramiro",
-    "registration": "/path/to/agent-matrix/appservices/ramiro.yaml",
+    "registration": "/path/to/agent-matrix/appservices/ramiro.yaml", // or a file holding only the as_token
+    "localpart": "{person}.{name}", // optional, how agent accounts are named
+    "dispatcher": "agent", // optional, the dispatcher's {name}
     "workspace": "/path/to/workspace", // optional, enables the dispatcher
     "maxDownloadMB": 50, // optional, largest file matrix_download fetches
     "debug": false
@@ -126,9 +128,19 @@ its renderer, `lib/pages/chat/events/html_message.dart`. Other clients were not 
 }
 ```
 
+`localpart` names the person's agent accounts: `{person}` is the `person` option and `{name}` is `ses_<session id>`
+for a session or `dispatcher` for the dispatcher. It must match the user namespace of the appservice registration.
+The default, `{person}.{name}`, gives `@ramiro.ses_abc123` and `@ramiro.agent`. On a server where people's names
+contain dots, `{person}+{name}` keeps them apart from people's own accounts (`@pau.oliver+ses_abc123` next to
+`@pau.oliver`). Changing it only affects accounts created afterwards; existing sessions keep theirs.
+
+`dispatcher` names the dispatcher, for instance when two OpenCode servers of the same person use one homeserver and
+each needs its own.
+
 ## Tests
 
 `bun install && bun test`. `index.test.ts` runs against the local Synapse (skipped if it is down) with a mock OpenCode context.
+`TEST_PERSON` and `TEST_LOCALPART` run it as another person and naming, after `../add-person.sh <person> --localpart <template>`.
 
 ## Known gaps
 

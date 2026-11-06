@@ -2,12 +2,20 @@ import { afterAll, beforeAll, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { DEFAULT_DISPATCHER, DEFAULT_LOCALPART, dispatcherLocalpart, sessionLocalpart } from "./format.ts"
 import plugin from "./index.ts"
 import { readAsToken } from "./matrix.ts"
 
-// Runs against the local Synapse from ../setup.sh with person "ramiro" (../add-person.sh ramiro).
+// Runs against the local Synapse from ../setup.sh with person "ramiro" (../add-person.sh ramiro). TEST_PERSON and
+// TEST_LOCALPART test another person and naming (../add-person.sh <person> --localpart <template>).
 const HOMESERVER = "http://localhost:8008"
 const ROOT = join(import.meta.dir, "..")
+const PERSON = process.env.TEST_PERSON ?? "ramiro"
+const identity = { person: PERSON, serverName: "agents.local", localpart: process.env.TEST_LOCALPART ?? DEFAULT_LOCALPART, dispatcher: DEFAULT_DISPATCHER }
+const HUMAN = `@${PERSON}:agents.local`
+const DISPATCHER = `@${dispatcherLocalpart(identity)}:agents.local`
+const REGISTRATION = join(ROOT, `appservices/${PERSON}.yaml`)
+const accountOf = (sessionID: string) => `@${sessionLocalpart(identity, sessionID)}:agents.local`
 const up = await fetch(`${HOMESERVER}/health`).then((r) => r.ok).catch(() => false)
 
 const run = Date.now().toString(36)
@@ -51,8 +59,9 @@ function mockCtx() {
       options: {
         homeserver: HOMESERVER,
         serverName: "agents.local",
-        person: "ramiro",
-        registration: join(ROOT, "appservices/ramiro.yaml"),
+        person: PERSON,
+        localpart: identity.localpart,
+        registration: REGISTRATION,
         workspace: WORKSPACE,
       },
       storage: {
@@ -162,7 +171,7 @@ async function waitForAsync<T>(check: () => Promise<T | undefined>, ms = 20_000)
 
 /** GET as one of the person's appservice accounts. */
 function asAccount(userID: string, path: string, query: Record<string, string> = {}): Promise<any> {
-  const token = readAsToken(join(ROOT, "appservices/ramiro.yaml"))
+  const token = readAsToken(REGISTRATION)
   const params = new URLSearchParams({ ...query, user_id: userID })
   return fetch(`${HOMESERVER}/_matrix/client/v3${path}?${params}`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -186,7 +195,7 @@ afterAll(() => stop())
 
 test.skipIf(!up)("a lead can message a worker that never used Matrix, and the worker can reply", async () => {
   const sent = JSON.parse((await call("matrix_send", LEAD, { to: WORKER, text: "hello worker" })).content)
-  expect(sent.from).toBe(`@ramiro.${LEAD.toLowerCase()}:agents.local`)
+  expect(sent.from).toBe(accountOf(LEAD))
 
   const toWorker = await waitFor(noticeFor(WORKER, "hello worker"))
   expect(toWorker.resume).toBe(true)
@@ -221,10 +230,10 @@ test.skipIf(!up)("Threads workers get an account as soon as they are created", a
 let humanLogin: Promise<{ human: (path: string, method: string, body?: unknown) => Promise<any> }> | undefined
 function loginHuman() {
   humanLogin ??= (async () => {
-    const password = readFileSync(join(ROOT, "secrets/ramiro-password"), "utf8").trim()
+    const password = readFileSync(join(ROOT, `secrets/${PERSON}-password`), "utf8").trim()
     const login: any = await fetch(`${HOMESERVER}/_matrix/client/v3/login`, {
       method: "POST",
-      body: JSON.stringify({ type: "m.login.password", identifier: { type: "m.id.user", user: "ramiro" }, password }),
+      body: JSON.stringify({ type: "m.login.password", identifier: { type: "m.id.user", user: PERSON }, password }),
     }).then((r) => r.json())
     if (!login.access_token) throw new Error(`login failed: ${JSON.stringify(login)}`)
     const human = (path: string, method: string, body?: unknown) =>
@@ -248,7 +257,7 @@ test.skipIf(!up)("the human can reply from their own account and is framed as th
   await human(`/rooms/${encodeURIComponent(sent.room)}/send/m.room.message/t${run}`, "PUT", { msgtype: "m.text", body: "go with B" })
 
   const toLead = await waitFor(noticeFor(LEAD, "go with B"))
-  expect(toLead.text).toContain("your user (ramiro)")
+  expect(toLead.text).toContain(`your user (${PERSON})`)
 
   // Messages get a read receipt, which the human's client shows, once a model call includes them.
   const goWithB = toLead.metadata.agentMatrix.events.at(-1)
@@ -270,7 +279,7 @@ async function readReceipt(human: (path: string, method: string) => Promise<any>
 }
 
 test.skipIf(!up)("a DM to the dispatcher starts a session that gets its own DM with the human", async () => {
-  const dispatcher = "@ramiro.agent:agents.local"
+  const dispatcher = DISPATCHER
   const { human } = await loginHuman()
   const { room_id: room } = await human("/createRoom", "POST", { preset: "trusted_private_chat", is_direct: true, invite: [dispatcher] })
   await waitForAsync(async () => (await human(`/rooms/${encodeURIComponent(room)}/joined_members`, "GET")).joined?.[dispatcher])
@@ -287,8 +296,8 @@ test.skipIf(!up)("a DM to the dispatcher starts a session that gets its own DM w
   const self = (mock.store.get(`account:${prompt.sessionID}`) as { userID: string }).userID
   expect(prompt.text).toContain(`as ${self}`)
 
-  const dm = mock.store.get(`dm:${prompt.sessionID}:@ramiro:agents.local`) as string
-  const membership = await asAccount(self, `/rooms/${encodeURIComponent(dm)}/state/m.room.member/${encodeURIComponent("@ramiro:agents.local")}`)
+  const dm = mock.store.get(`dm:${prompt.sessionID}:${HUMAN}`) as string
+  const membership = await asAccount(self, `/rooms/${encodeURIComponent(dm)}/state/m.room.member/${encodeURIComponent(HUMAN)}`)
   expect(membership.membership).toBe("invite")
   const replies = await human(`/rooms/${encodeURIComponent(room)}/messages?dir=b&limit=5`, "GET")
   expect(replies.chunk.some((event: any) => event.sender === dispatcher && event.content?.body?.includes(prompt.sessionID))).toBe(true)
@@ -301,7 +310,7 @@ test.skipIf(!up)("a DM to the dispatcher starts a session that gets its own DM w
 }, 60_000)
 
 test.skipIf(!up)("options pick the agent, model and directory; !commands control the dispatcher and the session", async () => {
-  const dispatcher = "@ramiro.agent:agents.local"
+  const dispatcher = DISPATCHER
   const { human } = await loginHuman()
   let txn = 0
   const say = (room: string, body: string) =>
@@ -331,7 +340,7 @@ test.skipIf(!up)("options pick the agent, model and directory; !commands control
   expect(await replyIn(room, dispatcher, prompt.sessionID)).toContain("(agent plan, model anthropic/claude-sonnet-5-5#high, in server/common-infra)")
 
   const self = (mock.store.get(`account:${prompt.sessionID}`) as { userID: string }).userID
-  const dm = mock.store.get(`dm:${prompt.sessionID}:@ramiro:agents.local`) as string
+  const dm = mock.store.get(`dm:${prompt.sessionID}:${HUMAN}`) as string
   // Messages sent before the account's first sync are not delivered.
   await waitFor(() => mock.store.get(`since:${prompt.sessionID}`))
   await human(`/join/${encodeURIComponent(dm)}`, "POST", {})
@@ -432,7 +441,7 @@ test.skipIf(!up)("Markdown is sent as HTML, plain text stays plain, and HTML can
   expect((await content({ text: "just words" })).format).toBeUndefined()
   expect(await content({ html: "<font color=\"red\">down</font>" })).toMatchObject({ body: "down", formatted_body: '<font color="red">down</font>' })
   const mentioned = await content({ text: "_look_", mention: [WORKER] })
-  expect(mentioned.formatted_body).toStartWith(`<p><a href="https://matrix.to/#/@ramiro.${WORKER.toLowerCase()}:agents.local">`)
+  expect(mentioned.formatted_body).toStartWith(`<p><a href="https://matrix.to/#/${accountOf(WORKER)}">`)
 }, 30_000)
 
 test.skipIf(!up)("sessions see event IDs, replies with the quoted message, and edits; they can reply, edit and react", async () => {
@@ -480,7 +489,7 @@ test.skipIf(!up)("matrix_api calls the client API as the session; matrix_openapi
   const api = async (input: unknown) => JSON.parse((await call("matrix_api", LEAD, input)).content)
   const put = await api({ method: "PUT", path: `/_matrix/client/v3/rooms/${room}/state/m.room.topic/`, body: { topic: `t ${run}` } })
   expect(put).toMatchObject({ as: sent.from, status: 200 })
-  const get = await api({ method: "GET", path: `/_matrix/client/v3/rooms/${room}/state/m.room.topic/`, query: { user_id: "@ramiro.agent:agents.local" } })
+  const get = await api({ method: "GET", path: `/_matrix/client/v3/rooms/${room}/state/m.room.topic/`, query: { user_id: DISPATCHER } })
   expect(get).toMatchObject({ status: 200, body: { topic: `t ${run}` } })
   // A body sent as a JSON string is sent as the object it encodes.
   const stringBody = await api({ method: "PUT", path: `/_matrix/client/v3/rooms/${room}/state/m.room.topic/`, body: JSON.stringify({ topic: `s ${run}` }) })
@@ -507,15 +516,15 @@ test.skipIf(!up)("a failed session tells the human in their DM", async () => {
 }, 30_000)
 
 test.skipIf(!up)("the dispatcher declines invites from anyone but its person", async () => {
-  const sent = JSON.parse((await call("matrix_send", LEAD, { to: "@ramiro.agent", text: "start something" })).content)
+  const sent = JSON.parse((await call("matrix_send", LEAD, { to: `@${dispatcherLocalpart(identity)}`, text: "start something" })).content)
   const lead = sent.from as string
   const members = async () =>
     Object.keys((await asAccount(lead, `/rooms/${encodeURIComponent(sent.room)}/joined_members`)).joined ?? {})
   // The invite is resolved (declined) once the dispatcher is no longer pending in the room.
   await waitForAsync(async () => {
-    const state = await asAccount(lead, `/rooms/${encodeURIComponent(sent.room)}/state/m.room.member/${encodeURIComponent("@ramiro.agent:agents.local")}`)
+    const state = await asAccount(lead, `/rooms/${encodeURIComponent(sent.room)}/state/m.room.member/${encodeURIComponent(DISPATCHER)}`)
     return state.membership === "leave"
   })
-  expect(await members()).not.toContain("@ramiro.agent:agents.local")
+  expect(await members()).not.toContain(DISPATCHER)
   expect(mock.prompts.some((input) => input.text.includes("start something"))).toBe(false)
 }, 30_000)

@@ -11,15 +11,34 @@ jobs:
     plan:
       - get: opencode-matrix-src
         trigger: true
-      - task: test
-        config:
-          inputs:
-            - name: opencode-matrix-src
-          platform: linux
-          image_resource:
-            type: registry-image
-            source:
-              repository: matrixdotorg/synapse
-          run:
-            dir: opencode-matrix-src
-            path: ci/test.sh
+      - in_parallel:
+          - task: test
+            config:
+              inputs:
+                - name: opencode-matrix-src
+              platform: linux
+              image_resource:
+                type: registry-image
+                source:
+                  repository: matrixdotorg/synapse
+              run:
+                dir: opencode-matrix-src
+                path: ci/test.sh
+          # Agent accounts named @<person>+ses_..., for people whose names contain dots, in a namespace that
+          # isn't exclusive.
+          - task: test-plus-localpart
+            config:
+              inputs:
+                - name: opencode-matrix-src
+              platform: linux
+              image_resource:
+                type: registry-image
+                source:
+                  repository: matrixdotorg/synapse
+              params:
+                TEST_PERSON: ramiro.balado
+                TEST_LOCALPART: "{person}+{name}"
+                TEST_EXCLUSIVE: "false"
+              run:
+                dir: opencode-matrix-src
+                path: ci/test.sh

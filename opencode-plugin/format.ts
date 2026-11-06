@@ -6,11 +6,42 @@ export const MAX_BODY_CHARS = 4_000
 export interface Identity {
   person: string
   serverName: string
+  /** How the person's agent accounts are named: `{person}` and `{name}` (`ses_...` or the dispatcher's name). */
+  localpart: string
+  /** The dispatcher's `{name}`. */
+  dispatcher: string
+}
+
+export const DEFAULT_LOCALPART = "{person}.{name}"
+export const DEFAULT_DISPATCHER = "agent"
+
+export function checkLocalpart(template: string) {
+  for (const placeholder of ["{person}", "{name}"]) {
+    if (template.split(placeholder).length !== 2) throw new Error(`localpart "${template}" must contain ${placeholder} exactly once`)
+  }
+}
+
+function agentLocalpart(identity: Identity, name: string) {
+  return identity.localpart.replace("{person}", identity.person).replace("{name}", name)
 }
 
 export function sessionLocalpart(identity: Identity, sessionID: string) {
   // Matrix localparts are lowercase; session IDs are not.
-  return `${identity.person}.${sessionID.toLowerCase()}`
+  return agentLocalpart(identity, sessionID.toLowerCase())
+}
+
+export function dispatcherLocalpart(identity: Identity) {
+  return agentLocalpart(identity, identity.dispatcher)
+}
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+
+/** The person an agent account belongs to, if `localpart` names one of anybody's sessions or dispatcher. */
+export function agentOwner(identity: Identity, localpart: string) {
+  const pattern = escapeRegExp(identity.localpart)
+    .replace(escapeRegExp("{person}"), "(.+)")
+    .replace(escapeRegExp("{name}"), `(?:ses_[a-z0-9]+|${escapeRegExp(identity.dispatcher)})`)
+  return new RegExp(`^${pattern}$`).exec(localpart)?.[1]
 }
 
 export function humanID(identity: Identity) {
@@ -42,9 +73,9 @@ export function describeSender(identity: Identity, sender: string, self: string)
   if (sender === self) return "you"
   if (sender === humanID(identity)) return `your user (${identity.person})`
   const localpart = sender.slice(1).split(":")[0]
-  if (localpart.startsWith(`${identity.person}.`)) return "another of your user's agent sessions"
-  const dot = localpart.indexOf(".")
-  if (dot > 0) return `an agent session of ${localpart.slice(0, dot)}`
+  const owner = agentOwner(identity, localpart)
+  if (owner === identity.person) return "another of your user's agent sessions"
+  if (owner) return `an agent session of ${owner}`
   return `a person (${localpart})`
 }
 

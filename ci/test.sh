@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
 # Runs the plugin's tests against a throwaway Synapse, inside the matrixdotorg/synapse image (Concourse can't run
 # Docker, so this replaces setup.sh and add-person.sh). Run from the repository root.
+#
+# TEST_PERSON, TEST_LOCALPART and TEST_EXCLUSIVE choose the person and how their agent accounts are named (the
+# plugin's `localpart` option); the defaults are the plugin's.
 set -euo pipefail
 
 BUN_VERSION=1.3.14
 SERVER_NAME=agents.local
-NAME=ramiro
+export TEST_PERSON="${TEST_PERSON:-ramiro}"
+DEFAULT_LOCALPART='{person}.{name}'
+export TEST_LOCALPART="${TEST_LOCALPART:-$DEFAULT_LOCALPART}"
+NAME="$TEST_PERSON"
 
 mkdir -p data appservices secrets
 # UID is read-only in bash, hence env.
 env SYNAPSE_SERVER_NAME=$SERVER_NAME SYNAPSE_REPORT_STATS=no SYNAPSE_CONFIG_DIR="$PWD/data" SYNAPSE_DATA_DIR="$PWD/data" \
   UID=0 GID=0 /start.py generate
-scripts/appservice-registration.sh "$NAME" "$SERVER_NAME" > "appservices/$NAME.yaml"
+scripts/appservice-registration.sh "$NAME" "$SERVER_NAME" "$TEST_LOCALPART" "${TEST_EXCLUSIVE:-true}" > "appservices/$NAME.yaml"
 { echo; cat synapse-overrides.yaml; echo "app_service_config_files: [$PWD/appservices/$NAME.yaml]"; } >> data/homeserver.yaml
 # The generated config logs to a file next to it; stderr is more useful in a build log.
 sed -i 's#^log_config:.*##' data/homeserver.yaml

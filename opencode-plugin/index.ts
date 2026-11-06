@@ -1,8 +1,12 @@
 import {
   attachmentType,
+  checkLocalpart,
+  DEFAULT_DISPATCHER,
+  DEFAULT_LOCALPART,
   describeAttachment,
   describeCount,
   describeSender,
+  dispatcherLocalpart,
   excerpt,
   formatMessage,
   htmlToText,
@@ -49,14 +53,22 @@ import { categories, describeOperation, findOperations, listLine, MAX_RESULTS, o
 // created the first time a session uses a matrix_* tool, when another session messages it, or right away
 // for Threads/workflow workers so their coordinator can reach them. Each account runs a /sync loop that
 // delivers DMs and mentions to its session as synthetic messages. With `workspace` set, a dispatcher
-// account (@<person>.agent) starts a new session for every DM or mention it gets from the person.
+// account (@<person>.agent by default) starts a new session for every DM or mention it gets from the person.
 
 export interface AgentMatrixOptions {
   homeserver: string
   serverName: string
-  /** Owner of this OpenCode server; session accounts are @<person>.<sessionID>. */
+  /** Owner of this OpenCode server: their own account is @<person>. */
   person: string
-  /** Appservice registration file holding the person's as_token. */
+  /**
+   * How the person's agent accounts are named, with `{person}` and `{name}` (`ses_<id>` for a session, `dispatcher` for
+   * the dispatcher). Default `{person}.{name}`: @ramiro.ses_abc123 and @ramiro.agent. It must match the appservice's
+   * user namespace.
+   */
+  localpart?: string
+  /** The dispatcher's `{name}` in `localpart`. Default `agent`. */
+  dispatcher?: string
+  /** Appservice registration file holding the person's as_token, or a file holding only the token. */
   registration: string
   /** Directory for sessions started through the dispatcher; the dispatcher is disabled without it. */
   workspace?: string
@@ -65,6 +77,7 @@ export interface AgentMatrixOptions {
   debug?: boolean
 }
 
+/** The dispatcher's key in loops and storage, whatever its account is called. */
 const DISPATCHER = "agent"
 const SYNC_TIMEOUT_MS = 30_000
 const RETRY_MS = 5_000
@@ -133,7 +146,13 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
   for (const key of ["homeserver", "serverName", "person", "registration"] as const) {
     if (!options?.[key]) throw new Error(`agent-matrix: missing option "${key}"`)
   }
-  const identity: Identity = { person: options.person, serverName: options.serverName }
+  const identity: Identity = {
+    person: options.person,
+    serverName: options.serverName,
+    localpart: options.localpart ?? DEFAULT_LOCALPART,
+    dispatcher: options.dispatcher ?? DEFAULT_DISPATCHER,
+  }
+  checkLocalpart(identity.localpart)
   const matrix = new Matrix({ homeserver: options.homeserver, serverName: options.serverName, asToken: readAsToken(options.registration) })
   const state = shared()
   state.ctxs.add(ctx)
@@ -473,7 +492,7 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
   async function startDispatcher(workspace: string) {
     if (state.loops.has(DISPATCHER)) return
     const human = humanID(identity)
-    const userID = await matrix.register(`${identity.person}.${DISPATCHER}`)
+    const userID = await matrix.register(dispatcherLocalpart(identity))
     const name = "New session"
     await matrix.setDisplayName(userID, name)
     startSyncLoop(DISPATCHER, userID, async (response, initial) => {
@@ -877,7 +896,7 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
           your_user: humanID(identity),
           addressing:
             '`to` accepts "user" (your user), a session ID (ses_...), @user:server, !room:server or #alias. Sessions of your user are @' +
-            `${identity.person}.<session id, lowercase>:${identity.serverName}.`,
+            `${sessionLocalpart(identity, "<session id, lowercase>")}:${identity.serverName}.`,
         }),
     })
     editor.add({

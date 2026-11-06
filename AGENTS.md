@@ -6,7 +6,7 @@ and the root scripts are the local Synapse used to develop it.
 
 ## Usage
 
-DM the dispatcher, `@<person>.agent:<server>` (or mention it in a room it is in). Each message starts a session; the
+DM the dispatcher, `@<person>.agent:<server>` by default (or mention it in a room it is in). Each message starts a session; the
 session's own account invites you to a DM, which is the conversation from then on. The dispatcher declines invites
 from anyone but `@<person>`. If a session fails (e.g. the model provider rejects the request), it posts the error in
 that DM.
@@ -27,5 +27,7 @@ to the session.
 
 CI (the `opencode-matrix` Concourse pipeline, `task update-pipeline`) runs `ci/test.sh` on every push: it starts a
 throwaway Synapse inside the `matrixdotorg/synapse` image, sets up `ramiro` as `add-person.sh` would, and runs the
-same tests. `synapse-overrides.yaml` and `scripts/appservice-registration.sh` are shared with `setup.sh` and
+same tests. A second task runs them as `ramiro.balado` with `localpart` `{person}+{name}` in a non-exclusive
+namespace (`TEST_PERSON`, `TEST_LOCALPART`, `TEST_EXCLUSIVE`). To run one locally:
+`docker run --rm --entrypoint /src/ci/test.sh -v <copy of the repo>:/src -w /src matrixdotorg/synapse`. `synapse-overrides.yaml` and `scripts/appservice-registration.sh` are shared with `setup.sh` and
 `add-person.sh`.

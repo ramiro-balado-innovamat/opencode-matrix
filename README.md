@@ -18,7 +18,10 @@ Each person gets:
   Its `as_token` can create and act as any account in that namespace, and nothing
   outside it. Agent sessions are accounts like `@ramiro.ses_abc123:agents.local`.
 
-The token is sent as a bearer token, with `?user_id=@<name>.<session>:agents.local`
+`./add-person.sh <name> --localpart '{person}+{name}'` names the namespace like the plugin's `localpart` option
+(`@<name>+*`), and `--not-exclusive` lets other accounts be created in it too.
+
+The token is sent as a bearer token, with `?user_id=` set to the session's account
 to choose which session account is acting. The appservice has `url: null`: the
 homeserver pushes nothing, and each session reads its own messages with `/sync`.
 
